@@ -1,6 +1,7 @@
 import cv2
 import sys
 import socket
+import json
 import numpy as np
 from threading import Thread, Lock
 
@@ -13,11 +14,14 @@ font = cv2.FONT_HERSHEY_SIMPLEX
 gesture = False
 x_movement = 0
 y_movement = 0
-gesture_show = 60 #number of frames a gesture is shown
+gesture_show = 10 #number of frames a gesture is shown
+# gesture_lock is used when a gesture is recorded and an action has to be taken based on it
+gesture_lock = Lock()
+handling_action = False
 
-def distance(x, y):
-    return np.linalg.norm(a-b)
-
+def distance(x,y):
+    import math
+    return math.sqrt((x[0]-y[0])**2+(x[1]-y[1])**2)
 
 #params for ShiTomasi corner detection
 feature_params = dict( maxCorners = 100,
@@ -52,7 +56,12 @@ def find_face():
             ret, frame = cap.read()
             global frame_gray
             frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(frame_gray, 1.3, 5)
+            # faces = face_cascade.detectMultiScale(frame_gray, 1.3, 5)
+            faces = face_cascade.detectMultiScale(frame_gray,
+                                    scaleFactor=1.1,
+                                    minNeighbors=5,
+                                    minSize=(30,30),
+                                    flags=cv2.CASCADE_SCALE_IMAGE)
             for (x,y,w,h) in faces:
                 cv2.rectangle(frame,(x,y),(x+w,y+h),(255,0,0),2)
                 face_found = True
@@ -114,7 +123,7 @@ class StreamServer():
     
     def start(self):
         if self.started:
-            print "already started"
+            print("already started")
             return None
         self.started = True
         self.thread = Thread(target=self.get_items, args=())
@@ -124,18 +133,30 @@ class StreamServer():
         print("connecting to the socket server")
         self.sock.connect((self.host, self.port))
         while self.started:
-            data = self.sock.recv(1024)
+            try:
+                data = self.sock.recv(1024)
+            except:
+                return
             self.update_lock.acquire()
-            self.current_item = json.loads(data)
+            if data and len(data) > 0:
+                self.current_item = json.loads(data)
             self.update_lock.release()
+    
+    def ack_item(self, gesture_in):
+        print("acking item...")
+        self.sock.sendall(gesture_in)
 
     def stop(self):
+        print("closing streaming server...")
+        self.sock.shutdown(socket.SHUT_RDWR)
         self.sock.close()
         self.thread.join()
 
 
-def take_action(gesture):
-    print("{} buying".format(gesture))
+def take_action(gesture, current_item):
+    if handling_action:
+        return
+    print(gesture, current_item)
 
 if __name__ == "__main__" :
     print("attemping to find face in video....")
@@ -150,9 +171,11 @@ if __name__ == "__main__" :
         old_gray = frame_gray.copy()
         frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         p1, st, err = cv2.calcOpticalFlowPyrLK(old_gray, frame_gray, p0, None, **lk_params)
+        if not err:
+            sys.exit(1)
         cv2.circle(frame, get_coords(p1), 4, (0,0,255), -1)
         cv2.circle(frame, get_coords(p0), 4, (255,0,0))
-        
+
         #get the xy coordinates for points p0 and p1
         a,b = get_coords(p0), get_coords(p1)
         x_movement += abs(a[0]-b[0])
@@ -168,15 +191,23 @@ if __name__ == "__main__" :
             gesture = 'Yes'
         if gesture and gesture_show > 0:
             cv2.putText(frame,'Gesture Detected: ' + gesture,(50,50), font, 1.2,(0,0,255),3)
-            take_action(gesture)
+            take_action(gesture, ss.current_item)
+            if gesture_show == 10:
+                gesture_lock.acquire()
+                handling_action = True
+                ss.ack_item(gesture)
+                gesture_lock.release()
             gesture_show -=1
         if gesture_show == 0:
             gesture = False
             x_movement = 0
             y_movement = 0
-            gesture_show = 60 #number of frames a gesture is shown
-            
-        p0 = p1
+            gesture_show = 10 #number of frames a gesture is shown
+            if gesture_show == 10:
+                gesture_lock.acquire()
+                handling_action = False
+                gesture_lock.release()
+        # p0 = p1
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(
@@ -188,7 +219,7 @@ if __name__ == "__main__" :
 
         for (x, y, w, h) in faces:
             cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        
+
         cv2.imshow('frame', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
