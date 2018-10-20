@@ -1,11 +1,19 @@
-from threading import Thread, Lock
 import cv2
 import sys
+import socket
 import numpy as np
+from threading import Thread, Lock
+
 
 face_cascade = cv2.CascadeClassifier("./algorithm.xml")
 p0 = None
 face_center = None
+frame_gray = None
+font = cv2.FONT_HERSHEY_SIMPLEX
+gesture = False
+x_movement = 0
+y_movement = 0
+gesture_show = 60 #number of frames a gesture is shown
 
 def distance(x, y):
     return np.linalg.norm(a-b)
@@ -28,29 +36,34 @@ def get_coords(p1):
 
 max_head_movement = 20
 movement_threshold = 50
-gesture_threshold = 175
+gesture_threshold = 150
 
 def find_face():
-    #find the face in the image
-    face_found = False
-    frame_num = 0
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-    while frame_num < 30:
-        # Take first frame and find corners in it
-        frame_num += 1
-        ret, frame = cap.read()
-        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(frame_gray, 1.3, 5)
-        for (x,y,w,h) in faces:
-            cv2.rectangle(frame,(x,y),(x+w,y+h),(255,0,0),2)
-            face_found = True
-        cv2.imshow('image',frame)
-        cv2.waitKey(1)
-    face_center = x+w/2, y+h/3
-    p0 = np.array([[face_center]], np.float32)
-    cv2.destroyAllWindows()
+    try:
+        #find the face in the image
+        face_found = False
+        frame_num = 0
+        cap = cv2.VideoCapture(0)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        while frame_num < 30:
+            # Take first frame and find corners in it
+            frame_num += 1
+            ret, frame = cap.read()
+            global frame_gray
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(frame_gray, 1.3, 5)
+            for (x,y,w,h) in faces:
+                cv2.rectangle(frame,(x,y),(x+w,y+h),(255,0,0),2)
+                face_found = True
+            cv2.imshow('image',frame)
+            cv2.waitKey(1)
+        global face_center
+        face_center = x+w/2, y+h/3
+        global p0
+        p0 = np.array([[face_center]], np.float32)
+    except:
+        sys.exit(1)
 
 class WebcamVideoStream :
     def __init__(self, src = 0, width = 320, height = 240) :
@@ -62,7 +75,7 @@ class WebcamVideoStream :
         self.read_lock = Lock()
 
     def start(self) :
-        if self.started :
+        if self.started:
             print("already started!!")
             return None
         self.started = True
@@ -90,12 +103,81 @@ class WebcamVideoStream :
     def __exit__(self, exc_type, exc_value, traceback) :
         self.stream.release()
 
+class StreamServer():
+    def __init__(self, host=None, port=10001):
+        self.host = host
+        self.port = port
+        self.started = False
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.update_lock = Lock()
+        self.current_item = None
+    
+    def start(self):
+        if self.started:
+            print "already started"
+            return None
+        self.started = True
+        self.thread = Thread(target=self.get_items, args=())
+        self.thread.start()
+    
+    def get_items(self):
+        print("connecting to the socket server")
+        self.sock.connect((self.host, self.port))
+        while self.started:
+            data = self.sock.recv(1024)
+            self.update_lock.acquire()
+            self.current_item = json.loads(data)
+            self.update_lock.release()
+
+    def stop(self):
+        self.sock.close()
+        self.thread.join()
+
+
+def take_action(gesture):
+    print("{} buying".format(gesture))
+
 if __name__ == "__main__" :
+    print("attemping to find face in video....")
     find_face()
     vs = WebcamVideoStream().start()
+    ss = StreamServer("localhost")
+    ss.start()
     print("Face center: {}".format(p0))
-    while True :
+    f_counter = 1
+    while True :        
         frame = vs.read()
+        old_gray = frame_gray.copy()
+        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        p1, st, err = cv2.calcOpticalFlowPyrLK(old_gray, frame_gray, p0, None, **lk_params)
+        cv2.circle(frame, get_coords(p1), 4, (0,0,255), -1)
+        cv2.circle(frame, get_coords(p0), 4, (255,0,0))
+        
+        #get the xy coordinates for points p0 and p1
+        a,b = get_coords(p0), get_coords(p1)
+        x_movement += abs(a[0]-b[0])
+        y_movement += abs(a[1]-b[1])
+        text = 'x_movement: ' + str(x_movement)
+        if not gesture: cv2.putText(frame,text,(50,50), font, 0.8,(0,0,255),2)
+        text = 'y_movement: ' + str(y_movement)
+        if not gesture: cv2.putText(frame,text,(50,100), font, 0.8,(0,0,255),2)
+
+        if x_movement > gesture_threshold:
+            gesture = 'No'
+        if y_movement > gesture_threshold:
+            gesture = 'Yes'
+        if gesture and gesture_show > 0:
+            cv2.putText(frame,'Gesture Detected: ' + gesture,(50,50), font, 1.2,(0,0,255),3)
+            take_action(gesture)
+            gesture_show -=1
+        if gesture_show == 0:
+            gesture = False
+            x_movement = 0
+            y_movement = 0
+            gesture_show = 60 #number of frames a gesture is shown
+            
+        p0 = p1
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(
             gray,
@@ -110,5 +192,12 @@ if __name__ == "__main__" :
         cv2.imshow('frame', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
+        if cv2.waitKey(5) & 0xFF == ord('r'):
+            print("finding ya face...")
+            find_face()
+            x_movement = 0
+            y_movement = 0
+        f_counter += 1
     vs.stop()
     cv2.destroyAllWindows()
+    ss.stop()
