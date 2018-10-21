@@ -17,8 +17,6 @@ headers = {
     'content-type': 'application/json',
     'nep-application-key': '8a0084a165d712fd016646ec1613003c',
     'nep-organization': 'bizniz',
-    'nep-enterprise-unit': '748c4a76cd714502b3bff0525cb48ca7',
-    'nep-service-version': '2.2.1:2'
 }
 
 headersIAS = {
@@ -75,18 +73,16 @@ def get_suggestions():
 
 def get_catalog():
     # hitting this endpoint
-    endpoint_snapshots = "/catalog/items?"
-    # get everything
-    query = ""
+    endpoint_snapshots = "/catalog/items/snapshot"
     # connecting to the API and returning json based on query
-    r = requests.get(GATEWAY_URL + endpoint_snapshots + query, auth=auth, headers=headers)
+    r = requests.get(GATEWAY_URL + endpoint_snapshots, auth=auth, headers=headers)
     print(r.content)
     if r.status_code > 400:
         return None
     else: 
         global catalog
         catalog = json.loads(r.content)
-    sendData(catalog)
+    # sendData(catalog)
 
 def isAvailable(itemId):
     # hitting this endpoint
@@ -102,7 +98,7 @@ def isAvailable(itemId):
         isItThere = None
         isItThere = json.loads(r.content)
 
-    if isItThere['isAvailableForSale']:
+    if isItThere['availableForSale']:
         return True
     else: 
         return False
@@ -110,24 +106,23 @@ def isAvailable(itemId):
 
 def sendData(data):
     isSnapshot = 'snapshot' in data
+   
+
+if __name__ == '__main__':
+    get_catalog()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("localhost", 10001))
     sock.listen(5)
     while True:
         conn, addr = sock.accept()
         while True:
-            if not isSnapshot:
-                for product in data['pageContent']:
-                    resp = json.dumps({"name": product['shortDescription']['values'][0]['value'], "itemId": product['itemId']})
-                    print(resp)
+            for snap in catalog['snapshot']:
+                is_available = isAvailable(snap['itemId'])
+                resp = json.dumps({"name": snap['shortDescription']['values'][0]['value'], "itemId": snap['itemId'], "is_available": is_available})
+                # print(resp)
+                try:
                     conn.sendall(resp)
-                    time.sleep(2.0)
-            else:
-                for snap in data['snapshot']:
-                    resp = json.dumps({"name": snap['shortDescription']['values'][0]['value'], "itemId": snap['itemId']})
-                    print(resp)
-                    conn.sendall(resp)
-                    time.sleep(2.0)
-
-if __name__ == '__main__':
-    prepData()
+                    data = conn.recv(10)
+                    print("Data from client: {}".format(data))
+                except:
+                    sys.exit(1)
