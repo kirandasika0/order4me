@@ -79,7 +79,7 @@ def get_catalog():
     print(r.content)
     if r.status_code > 400:
         return None
-    else: 
+    else:
         global catalog
         catalog = json.loads(r.content)
     # sendData(catalog)
@@ -100,13 +100,12 @@ def isAvailable(itemId):
 
     if isItThere['availableForSale']:
         return True
-    else: 
+    else:
         return False
-    
 
 def sendData(data):
     isSnapshot = 'snapshot' in data
-   
+
 
 if __name__ == '__main__':
     get_catalog()

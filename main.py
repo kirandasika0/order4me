@@ -120,7 +120,7 @@ class StreamServer():
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.update_lock = Lock()
         self.current_item = None
-    
+
     def start(self):
         if self.started:
             print("already started")
@@ -128,7 +128,7 @@ class StreamServer():
         self.started = True
         self.thread = Thread(target=self.get_items, args=())
         self.thread.start()
-    
+
     def get_items(self):
         print("connecting to the socket server")
         self.sock.connect((self.host, self.port))
